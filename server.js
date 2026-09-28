@@ -1,35 +1,9 @@
 const express = require("express");
 
 const app = express();
-
 app.use(express.json());
 
 const PORT = process.env.PORT || 10000;
-
-const LINK2M_API_URL =
-  process.env.LINK2M_API_URL ||
-  "https://link2m.com/api-shorten/v2";
-
-function getShortUrl(data) {
-  if (!data) return null;
-
-  if (typeof data === "string") {
-    const match = data.match(/https?:\/\/[^\s"'<>]+/i);
-    return match ? match[0] : null;
-  }
-
-  return (
-    data.short_url ||
-    data.shortUrl ||
-    data.url ||
-    data.link ||
-    data.result?.short_url ||
-    data.result?.shortUrl ||
-    data.result?.url ||
-    data.result?.link ||
-    null
-  );
-}
 
 app.get("/", (req, res) => {
   res.json({
@@ -46,103 +20,76 @@ app.get("/health", (req, res) => {
   });
 });
 
-/*
- * WORKER GỌI:
- *
- * POST /shorten
- *
- * {
- *   "token": "...",
- *   "url": "https://..."
- * }
- */
 app.post("/shorten", async (req, res) => {
   try {
-    const token =
-      String(req.body?.token || process.env.LINK2M_TOKEN || "").trim();
-
-    const destination =
-      String(req.body?.url || "").trim();
+    const token = process.env.LINK2M_TOKEN;
+    const url = req.body?.url;
 
     if (!token) {
-      return res.status(400).json({
+      return res.status(500).json({
         ok: false,
         error: "LINK2M_TOKEN_MISSING"
       });
     }
 
-    if (!destination) {
+    if (!url) {
       return res.status(400).json({
         ok: false,
         error: "URL_MISSING"
       });
     }
 
-    console.log("========== LINK2M ==========");
-    console.log("DESTINATION:", destination);
-    console.log("TOKEN:", token ? "SET" : "EMPTY");
-    console.log("API:", LINK2M_API_URL);
+    const api = `https://link2m.com/api-shorten/v2?api=${encodeURIComponent(token)}&url=${encodeURIComponent(url)}`;
 
-    const apiUrl =
-      `${LINK2M_API_URL}` +
-      `?api=${encodeURIComponent(token)}` +
-      `&url=${encodeURIComponent(destination)}`;
-
-    const response = await fetch(apiUrl, {
-      method: "GET",
-      headers: {
-        "Accept": "application/json,text/plain,*/*",
-        "User-Agent": "TLHT24H-Link2M-Proxy/1.0"
-      }
-    });
-
-    const raw = await response.text();
+    const response = await fetch(api);
+    const text = await response.text();
 
     console.log("LINK2M HTTP:", response.status);
-    console.log(
-      "LINK2M RESPONSE:",
-      raw.substring(0, 1000)
-    );
+    console.log("LINK2M RESPONSE:", text);
 
     if (!response.ok) {
       return res.status(502).json({
         ok: false,
         error: "LINK2M_HTTP_ERROR",
-        status: response.status
+        status: response.status,
+        response: text.substring(0, 500)
       });
     }
 
-    let data = null;
+    let data;
 
     try {
-      data = JSON.parse(raw);
+      data = JSON.parse(text);
     } catch {
-      data = raw;
+      return res.status(502).json({
+        ok: false,
+        error: "LINK2M_NOT_JSON",
+        response: text.substring(0, 500)
+      });
     }
 
-    const shortUrl = getShortUrl(data);
+    const shortUrl =
+      data.shortenedUrl ||
+      data.short_url ||
+      data.shortUrl ||
+      data.url ||
+      data.link;
 
     if (!shortUrl) {
       return res.status(502).json({
         ok: false,
-        error: "LINK2M_NO_SHORT_URL",
-        response:
-          typeof data === "string"
-            ? data.substring(0, 1000)
-            : data
+        error: "SHORT_URL_NOT_FOUND",
+        response: data
       });
     }
 
-    console.log("SHORT URL:", shortUrl);
-
     return res.json({
       ok: true,
-      short_url: shortUrl,
-      url: shortUrl
+      short_url: shortUrl
     });
 
   } catch (error) {
-    console.error("SHORTEN ERROR:", error);
+    console.error("PROXY ERROR:", error);
 
     return res.status(500).json({
       ok: false,
@@ -160,8 +107,5 @@ app.use((req, res) => {
 });
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log("=================================");
-  console.log("TLHT24H Link2M Proxy");
-  console.log("Server running on port", PORT);
-  console.log("=================================");
+  console.log("TLHT24H Link2M Proxy running on port", PORT);
 });
